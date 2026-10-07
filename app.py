@@ -185,3 +185,8 @@ else:
                             
                             with open(temp_audio.name, "rb") as file:
                                 st.download_button(
+                                    label="⬇️ Tải file Audio",
+                                    data=file, file_name="sach_noi.mp3", mime="audio/mp3", use_container_width=True
+                                )
+                        except Exception as e:
+                            st.error(f"Lỗi xử lý âm thanh: {e}")

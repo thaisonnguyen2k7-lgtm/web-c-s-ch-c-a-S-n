@@ -1,0 +1,47 @@
+import streamlit as st
+import edge_tts
+import asyncio
+import tempfile
+import os
+
+st.set_page_config(page_title="App Đọc Sách AI", page_icon="🎧", layout="centered")
+st.title("🎧 Ứng Dụng Đọc Sách AI")
+st.write("Tải file `.txt` lên đây, AI sẽ đọc cho bạn nghe với giọng truyền cảm!")
+
+VOICES = {
+    "Giọng Nữ (Hoài My - Trầm ấm, tự nhiên)": "vi-VN-HoaiMyNeural",
+    "Giọng Nam (Nam Minh - Rõ ràng, mạnh mẽ)": "vi-VN-NamMinhNeural"
+}
+
+voice_choice = st.selectbox("1. Chọn giọng đọc:", list(VOICES.keys()))
+uploaded_file = st.file_uploader("2. 📂 Chọn file sách (.txt) của bạn", type=["txt"])
+
+text_input = ""
+if uploaded_file is not None:
+    text_input = uploaded_file.read().decode("utf-8")
+
+text = st.text_area("Hoặc dán trực tiếp đoạn văn vào đây:", value=text_input, height=250)
+
+async def tao_audio(text, voice, file_path):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(file_path)
+
+if st.button("▶️ Tạo Sách Nói", use_container_width=True):
+    if text.strip() == "":
+        st.warning("⚠️ Vui lòng tải file sách hoặc nhập văn bản trước nhé!")
+    else:
+        with st.spinner("🤖 AI đang phân tích và tạo giọng đọc... Vui lòng chờ vài giây!"):
+            try:
+                temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                temp_audio.close()
+                asyncio.run(tao_audio(text, VOICES[voice_choice], temp_audio.name))
+                st.success("🎉 Đã tạo xong! Bạn có thể nghe ngay hoặc tải về.")
+                st.audio(temp_audio.name, format="audio/mp3")
+                
+                with open(temp_audio.name, "rb") as file:
+                    st.download_button(
+                        label="⬇️ Tải file âm thanh này về máy (.mp3)",
+                        data=file, file_name="sach_noi_ai.mp3", mime="audio/mp3", use_container_width=True
+                    )
+            except Exception as e:
+                st.error(f"Đã xảy ra lỗi: {e}")

@@ -1,2 +1,5 @@
 streamlit
 edge-tts
+PyPDF2
+EbookLib
+beautifulsoup4

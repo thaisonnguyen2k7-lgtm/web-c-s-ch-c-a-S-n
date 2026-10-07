@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 import re
 import fitz  # PyMuPDF
 
-# ---- CẤU HÌNH TRANG LỚN ----
 st.set_page_config(page_title="Reader & AudioBook AI", page_icon="📖", layout="wide", initial_sidebar_state="collapsed")
 
 if 'theme' not in st.session_state:
@@ -53,45 +52,43 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# ---- BỘ XỬ LÝ EPUB ĐẶC TRỊ NHẢY CHỮ ----
+# ---- BỘ XỬ LÝ EPUB (CẬP NHẬT TỐI THƯỢNG) ----
 def extract_text_from_epub(file_path):
     book = epub.read_epub(file_path)
-    chapters = []
-    
+    text = ""
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-        # Đọc lõi HTML của sách
         soup = BeautifulSoup(item.get_body_content(), 'html.parser')
         
-        # 1. Xóa các thẻ rác (CSS, scripts) không phải văn bản
-        for r in soup(['script', 'style', 'head', 'title', 'meta']):
-            r.extract()
+        # 1. Xóa các thẻ rác
+        for script in soup(["script", "style", "head", "title", "meta"]):
+            script.extract()
             
-        # 2. Xử lý chính xác các ngắt dòng của HTML
-        for br in soup.find_all("br"):
-            br.replace_with("\n") # Đổi thẻ ngắt dòng thành ký tự xuống dòng
-            
-        # Thêm dấu xuống dòng sau mỗi đoạn văn (p, div, tiêu đề)
-        for block in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]):
-            block.insert_after(soup.new_string("\n\n"))
-            
-        # 3. Hút toàn bộ chữ ra (các chữ có hiệu ứng in đậm/nghiêng sẽ được nối bằng khoảng trắng)
-        text = soup.get_text(separator=' ')
+        # 2. Xử lý khoảng cách đoạn văn TRƯỚC KHI rút chữ
+        for tag in soup.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']):
+            if tag.name == 'br':
+                tag.replace_with('\n')
+            else:
+                tag.insert_after(soup.new_string('\n\n'))
+                
+        # 3. Rút chữ KHÔNG DÙNG separator. 
+        # Bí quyết ở đây: Nếu file EPUB lậu tách chữ "không" thành <span>kh</span><span>ông</span>
+        # Việc không dùng separator sẽ tự động nối chúng lại thành "không" chuẩn xác.
+        raw_text = soup.get_text()
         
-        # 4. Dọn dẹp khoảng trắng để chữ xếp hàng ngay ngắn
-        lines = text.split('\n')
-        # Gom các khoảng trắng thừa ở mỗi dòng
-        cleaned_lines = [' '.join(line.split()) for line in lines]
-        text = '\n'.join(cleaned_lines)
+        # 4. Xóa các "khoảng trắng tàng hình" (Zero-width space) hay có trong EPUB lậu
+        raw_text = raw_text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
         
-        # Gom nhiều dấu xuống dòng liên tiếp thành tối đa 2 dấu (tạo khoảng cách đoạn văn)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        if text.strip():
-            chapters.append(text.strip())
+        if raw_text.strip():
+            text += raw_text.strip() + "\n\n"
             
-    return '\n\n'.join(chapters)
+    # 5. Dọn dẹp lần cuối
+    text = re.sub(r'[ \t]+', ' ', text) # Gom nhiều dấu cách thành 1
+    text = re.sub(r'([a-zà-ỹ,])\n+([a-zà-ỹ])', r'\1 \2', text, flags=re.IGNORECASE) # Nối câu bị đứt
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 
-# ---- XỬ LÝ PDF (Giữ nguyên dùng PyMuPDF) ----
+# ---- XỬ LÝ PDF ----
 def extract_text_from_pdf(file_path):
     text = ""
     with fitz.open(file_path) as doc:
@@ -140,7 +137,7 @@ if uploaded_file is None:
     st.info("👈 Bắt đầu bằng cách tải một cuốn sách (EPUB, PDF, TXT) ở góc trên bên trái.")
 else:
     file_extension = uploaded_file.name.split('.')[-1].lower()
-    with st.spinner("⏳ Đang giải mã và định dạng lại cấu trúc sách..."):
+    with st.spinner("⏳ Đang giải mã sách..."):
         try:
             if file_extension == "txt":
                 text_input = uploaded_file.read().decode("utf-8")
@@ -165,7 +162,7 @@ else:
             st.markdown(f'<div class="reading-box">{text_input.replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)
             
         with main_col2:
-            st.subheader("🎧 Trình phát Audio Siêu Tốc")
+            st.subheader("🎧 Trình phát Audio")
             doan_sach_muon_nghe = st.text_area(
                 "Copy đoạn sách ở khung bên trái dán vào đây.", 
                 height=250, 
@@ -188,8 +185,3 @@ else:
                             
                             with open(temp_audio.name, "rb") as file:
                                 st.download_button(
-                                    label="⬇️ Tải file Audio",
-                                    data=file, file_name="sach_noi.mp3", mime="audio/mp3", use_container_width=True
-                                )
-                        except Exception as e:
-                            st.error(f"Lỗi xử lý âm thanh: {e}")

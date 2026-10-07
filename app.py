@@ -3,11 +3,11 @@ import edge_tts
 import asyncio
 import tempfile
 import os
-import pdfplumber
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
+import fitz  # PyMuPDF
 
 # ---- CẤU HÌNH TRANG LỚN ----
 st.set_page_config(page_title="Reader & AudioBook AI", page_icon="📖", layout="wide", initial_sidebar_state="collapsed")
@@ -39,7 +39,7 @@ st.markdown(f"""
         height: 70vh;
         overflow-y: scroll;
         margin-bottom: 20px;
-        text-align: justify; /* Căn đều 2 bên cho đẹp */
+        text-align: justify;
     }}
     div.stButton > button {{
         background: linear-gradient(135deg, #10b981 0%, #059669 100%);
@@ -49,62 +49,60 @@ st.markdown(f"""
         padding: 10px 24px;
         font-size: 16px;
         font-weight: bold;
-        transition: all 0.3s ease;
-    }}
-    div.stButton > button:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
     }}
     </style>
 """, unsafe_allow_html=True)
 
-# ---- BỘ LỌC DỌN DẸP VĂN BẢN (CHỐNG NHẢY CHỮ) ----
-def clean_text(text):
-    # 1. Nối các câu bị ngắt xuống dòng vô cớ ở giữa đoạn
-    # Nếu dòng kết thúc không phải dấu chấm, phẩy, hỏi, than -> nối với dòng dưới
-    text = re.sub(r'([^\.\!\?\:\;\,])\n([a-zà-ỹ])', r'\1 \2', text)
-    
-    # 2. Xóa các khoảng trắng lặp lại (ví dụ: "chữ     bị    nhảy")
-    text = re.sub(r' +', ' ', text)
-    
-    # 3. Tách các câu bị dính liền do lỗi PDF (ví dụ: "chấm.Viết")
-    text = re.sub(r'([a-zà-ỹ])\.([A-ZÀ-Ỹ])', r'\1. \2', text)
-    
-    # 4. Xóa các ký tự ngắt trang, ký tự lạ
-    text = text.replace('\x0c', '')
-    
-    return text.strip()
-
-# ---- CÁC HÀM XỬ LÝ FILE MỚI ----
-def extract_text_from_pdf(file_path):
-    text = ""
-    with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages:
-            # layout=True giúp giữ đúng thứ tự cột, đoạn văn
-            page_text = page.extract_text(layout=True) 
-            if page_text:
-                text += page_text + "\n"
-    return clean_text(text)
-
+# ---- BỘ XỬ LÝ EPUB ĐẶC TRỊ NHẢY CHỮ ----
 def extract_text_from_epub(file_path):
     book = epub.read_epub(file_path)
-    text = ""
+    chapters = []
+    
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        # Đọc lõi HTML của sách
         soup = BeautifulSoup(item.get_body_content(), 'html.parser')
         
-        # Tìm tất cả các thẻ tạo đoạn văn (paragraph) hoặc các khối (div, header)
-        for element in soup.find_all(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            # Lấy nội dung chữ bên trong thẻ, thay thế <br> thành dấu cách để tránh dính chữ
-            paragraph_text = element.get_text(separator=' ', strip=True)
+        # 1. Xóa các thẻ rác (CSS, scripts) không phải văn bản
+        for r in soup(['script', 'style', 'head', 'title', 'meta']):
+            r.extract()
             
-            if paragraph_text:
-                # Gom các khoảng trắng thừa thành 1 khoảng trắng
-                paragraph_text = re.sub(r'\s+', ' ', paragraph_text)
-                
-                # Thêm đoạn văn vào tổng thể văn bản, cách nhau 2 lần xuống dòng
-                text += paragraph_text + "\n\n"
-                
+        # 2. Xử lý chính xác các ngắt dòng của HTML
+        for br in soup.find_all("br"):
+            br.replace_with("\n") # Đổi thẻ ngắt dòng thành ký tự xuống dòng
+            
+        # Thêm dấu xuống dòng sau mỗi đoạn văn (p, div, tiêu đề)
+        for block in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]):
+            block.insert_after(soup.new_string("\n\n"))
+            
+        # 3. Hút toàn bộ chữ ra (các chữ có hiệu ứng in đậm/nghiêng sẽ được nối bằng khoảng trắng)
+        text = soup.get_text(separator=' ')
+        
+        # 4. Dọn dẹp khoảng trắng để chữ xếp hàng ngay ngắn
+        lines = text.split('\n')
+        # Gom các khoảng trắng thừa ở mỗi dòng
+        cleaned_lines = [' '.join(line.split()) for line in lines]
+        text = '\n'.join(cleaned_lines)
+        
+        # Gom nhiều dấu xuống dòng liên tiếp thành tối đa 2 dấu (tạo khoảng cách đoạn văn)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        if text.strip():
+            chapters.append(text.strip())
+            
+    return '\n\n'.join(chapters)
+
+# ---- XỬ LÝ PDF (Giữ nguyên dùng PyMuPDF) ----
+def extract_text_from_pdf(file_path):
+    text = ""
+    with fitz.open(file_path) as doc:
+        for page in doc:
+            blocks = page.get_text("blocks")
+            for block in blocks:
+                block_text = block[4].replace('\n', ' ')
+                block_text = re.sub(r' +', ' ', block_text)
+                text += block_text.strip() + "\n\n"
     return text.strip()
+
 async def tao_audio(text, voice, file_path):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(file_path)
@@ -139,15 +137,14 @@ st.markdown("---")
 
 text_input = ""
 if uploaded_file is None:
-    st.info("👈 Bắt đầu bằng cách tải một cuốn sách hoặc file tài liệu của bạn ở góc trên bên trái.")
+    st.info("👈 Bắt đầu bằng cách tải một cuốn sách (EPUB, PDF, TXT) ở góc trên bên trái.")
 else:
     file_extension = uploaded_file.name.split('.')[-1].lower()
-    with st.spinner("⏳ Đang dọn dẹp và sắp xếp lại văn bản..."):
+    with st.spinner("⏳ Đang giải mã và định dạng lại cấu trúc sách..."):
         try:
             if file_extension == "txt":
-                text_input = clean_text(uploaded_file.read().decode("utf-8"))
+                text_input = uploaded_file.read().decode("utf-8")
             else:
-                # PDF và EPUB cần lưu tạm để pdfplumber và ebooklib đọc
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as tmp_file:
                     tmp_file.write(uploaded_file.getvalue())
                     tmp_file_path = tmp_file.name
@@ -170,7 +167,7 @@ else:
         with main_col2:
             st.subheader("🎧 Trình phát Audio Siêu Tốc")
             doan_sach_muon_nghe = st.text_area(
-                "Copy đoạn sách ở khung bên trái dán vào đây (Dưới 3000 chữ sẽ tạo trong 5 giây).", 
+                "Copy đoạn sách ở khung bên trái dán vào đây.", 
                 height=250, 
                 placeholder="Dán đoạn sách bạn muốn nghe vào đây..."
             )
@@ -179,15 +176,12 @@ else:
                 if not doan_sach_muon_nghe.strip():
                     st.warning("⚠️ Vui lòng dán đoạn sách bạn muốn nghe vào ô trống phía trên!")
                 else:
-                    if len(doan_sach_muon_nghe) > 5000:
-                        st.warning("Đoạn văn này khá dài, có thể mất khoảng 30s - 1 phút. Để siêu tốc, hãy dán từng chương một!")
-                    
                     with st.spinner("🤖 Đang chuyển thành giọng nói..."):
                         try:
                             temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                             temp_audio.close()
                             
-                            asyncio.run(tao_audio(clean_text(doan_sach_muon_nghe), VOICES[voice_choice], temp_audio.name))
+                            asyncio.run(tao_audio(doan_sach_muon_nghe, VOICES[voice_choice], temp_audio.name))
                             
                             st.success("Hoàn tất!")
                             st.audio(temp_audio.name, format="audio/mp3")

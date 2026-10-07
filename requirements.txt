@@ -1,5 +1,5 @@
 streamlit
 edge-tts
-pdfplumber
+PyMuPDF
 EbookLib
 beautifulsoup4

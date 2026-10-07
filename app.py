@@ -91,9 +91,20 @@ def extract_text_from_epub(file_path):
     text = ""
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         soup = BeautifulSoup(item.get_body_content(), 'html.parser')
-        text += soup.get_text() + "\n"
-    return clean_text(text)
-
+        
+        # Tìm tất cả các thẻ tạo đoạn văn (paragraph) hoặc các khối (div, header)
+        for element in soup.find_all(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+            # Lấy nội dung chữ bên trong thẻ, thay thế <br> thành dấu cách để tránh dính chữ
+            paragraph_text = element.get_text(separator=' ', strip=True)
+            
+            if paragraph_text:
+                # Gom các khoảng trắng thừa thành 1 khoảng trắng
+                paragraph_text = re.sub(r'\s+', ' ', paragraph_text)
+                
+                # Thêm đoạn văn vào tổng thể văn bản, cách nhau 2 lần xuống dòng
+                text += paragraph_text + "\n\n"
+                
+    return text.strip()
 async def tao_audio(text, voice, file_path):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(file_path)
